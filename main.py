@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import dataclasses
-from reasoning.analyzer import analyze_market, get_all_trades
+from reasoning.analyzer import analyze_market, get_all_trades, save_trade
 from shared.models import Market, SignalBundle
 
 app = FastAPI()
@@ -34,6 +34,8 @@ def analyze(market_id: str):
         confidence=0.7
     )
     decision = analyze_market(market, signals)
+    if decision.direction != "PASS":
+        save_trade(decision)
     return dataclasses.asdict(decision)
 
 @app.get("/trades")

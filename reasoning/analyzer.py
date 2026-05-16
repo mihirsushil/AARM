@@ -1,5 +1,5 @@
 import os, sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 import httpx
@@ -195,12 +195,24 @@ REASONING: [2-3 sentences explaining your view, referencing the related markets]
             parsed[key.strip()] = val.strip()
 
     model_prob = float(parsed.get("MODEL_PROB", market.market_prob))
-    edge = float(parsed.get("EDGE", "0"))
     direction = parsed.get("DIRECTION", "PASS")
     reasoning = parsed.get("REASONING", "No reasoning provided")
 
+    # Compute edge ourselves — don't trust LLM arithmetic
+    edge = model_prob - market.market_prob
+
+    # Ensure direction is consistent with edge sign
+    if direction == "YES" and edge < 0:
+        direction = "PASS"
+    elif direction == "NO" and edge > 0:
+        direction = "PASS"
+
     if direction != "PASS" and abs(edge) > 0.08:
-        raw_kelly = abs(edge) / (1 - market.market_prob + abs(edge))
+        # Correct fractional Kelly for binary prediction markets
+        if direction == "YES":
+            raw_kelly = edge / (1 - market.market_prob)
+        else:
+            raw_kelly = abs(edge) / market.market_prob
         stake = min(raw_kelly * 0.25, 0.05)
     else:
         stake = 0.0
@@ -245,7 +257,7 @@ def save_trade(decision: TradeDecision, bankroll: float = 10000.0):
         bankroll * decision.stake_pct,
         decision.model_prob,
         decision.reasoning,
-        datetime.utcnow().isoformat()
+        datetime.now(timezone.utc).isoformat()
     ))
     conn.commit()
     conn.close()
@@ -253,6 +265,20 @@ def save_trade(decision: TradeDecision, bankroll: float = 10000.0):
 
 def get_all_trades():
     conn = sqlite3.connect("aarm.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            market_id TEXT,
+            direction TEXT,
+            edge REAL,
+            stake_usd REAL,
+            model_prob REAL,
+            reasoning TEXT,
+            timestamp TEXT,
+            status TEXT DEFAULT 'open',
+            pnl REAL DEFAULT 0.0
+        )
+    """)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT * FROM trades ORDER BY timestamp DESC"
